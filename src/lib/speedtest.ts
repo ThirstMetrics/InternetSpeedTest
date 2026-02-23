@@ -1,4 +1,5 @@
 import type { SpeedTestState } from '@/types';
+import { apiUrl } from '@/lib/api';
 
 type ProgressCallback = (state: SpeedTestState) => void;
 
@@ -40,7 +41,7 @@ async function measureLatency(onProgress: ProgressCallback): Promise<{ latency: 
 
   for (let i = 0; i < LATENCY_ROUNDS; i++) {
     const start = performance.now();
-    await fetch('/api/speedtest/ping', { cache: 'no-store' });
+    await fetch(apiUrl('/api/speedtest/ping'), { cache: 'no-store' });
     const elapsed = performance.now() - start;
     latencies.push(elapsed);
 
@@ -129,7 +130,7 @@ async function measureUpload(
     const formData = new FormData();
     formData.append('file', uploadData, 'upload-test.bin');
 
-    const resp = await fetch('/api/speedtest/upload', {
+    const resp = await fetch(apiUrl('/api/speedtest/upload'), {
       method: 'POST',
       body: formData,
     });

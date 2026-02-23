@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { apiUrl } from '@/lib/api';
 
 export interface LeaderboardEntry {
   id: string;
@@ -29,7 +30,7 @@ export default function Leaderboard({ onSelectLocation }: LeaderboardProps) {
         setLoading(true);
         setError(null);
         const response = await fetch(
-          '/api/locations?lat=36.1699&lng=-115.1398&radius=50'
+          apiUrl('/api/locations?lat=36.1699&lng=-115.1398&radius=50')
         );
 
         if (!response.ok) {

@@ -3,6 +3,7 @@
 import { useState, useCallback } from 'react';
 import { runSpeedTest } from '@/lib/speedtest';
 import { getCurrentPosition, isWithinGeofence, getNetworkType } from '@/lib/geo';
+import { apiUrl } from '@/lib/api';
 import SpeedGauge from '@/components/SpeedGauge';
 import type { SpeedTestState, GeoPosition } from '@/types';
 
@@ -66,7 +67,7 @@ export default function SpeedTest({ onComplete }: SpeedTestProps) {
       setSaving(true);
       try {
         const networkType = getNetworkType();
-        const response = await fetch('/api/speedtest/results', {
+        const response = await fetch(apiUrl('/api/speedtest/results'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

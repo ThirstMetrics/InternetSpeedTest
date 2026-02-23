@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { getMapViewsRemaining, incrementMapViews, hasMapViewsRemaining } from '@/lib/storage';
+import { apiUrl } from '@/lib/api';
 
 interface MapLocation {
   id: string;
@@ -54,7 +55,7 @@ export default function SpeedMap({ isAuthenticated, onAuthRequired }: SpeedMapPr
 
     async function fetchLocations() {
       try {
-        const res = await fetch('/api/locations?lat=36.1699&lng=-115.1398&radius=25');
+        const res = await fetch(apiUrl('/api/locations?lat=36.1699&lng=-115.1398&radius=25'));
         const data = await res.json();
         setLocations(data.locations || []);
       } catch (err) {
