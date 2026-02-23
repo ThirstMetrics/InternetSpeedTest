@@ -127,12 +127,10 @@ async function measureUpload(
   const uploadData = new Blob([randomData]);
 
   const uploadChunk = async (): Promise<number> => {
-    const formData = new FormData();
-    formData.append('file', uploadData, 'upload-test.bin');
-
     const resp = await fetch(apiUrl('/api/speedtest/upload'), {
       method: 'POST',
-      body: formData,
+      body: uploadData,
+      headers: { 'Content-Type': 'application/octet-stream' },
     });
     // Use server-reported bytes received for accuracy
     const result = await resp.json();
