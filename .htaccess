@@ -1,4 +1,13 @@
-DirectoryIndex disabled
 RewriteEngine On
 RewriteBase /
-RewriteRule ^(.*)?$ http://127.0.0.1:3000/$1 [P,L]
+
+# Serve Next.js static files from .next/static directly if they exist
+RewriteCond %{DOCUMENT_ROOT}/.next/static/%{REQUEST_URI} -f
+RewriteRule ^_next/static/(.*)$ .next/static/$1 [L]
+
+# Don't rewrite actual files (like test.php, favicon.svg, etc)
+RewriteCond %{REQUEST_FILENAME} -f
+RewriteRule ^ - [L]
+
+# Everything else goes through index.php (PHP proxy to Node.js)
+RewriteRule ^(.*)$ index.php [L,QSA]
