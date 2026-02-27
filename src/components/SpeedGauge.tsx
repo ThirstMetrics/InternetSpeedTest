@@ -1,15 +1,27 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { SpeedTestState } from '@/types';
-import { getSpeedTier, getSmileColor, getSmileFactor } from '@/lib/speedTier';
+import { getSpeedTier, getUploadTier, getPingTier, getJitterTier, getSmileColor, getSmileFactor, SpeedTier } from '@/lib/speedTier';
 
 interface SpeedGaugeProps {
   state: SpeedTestState;
 }
 
+type MetricKey = 'download' | 'upload' | 'ping' | 'jitter';
+
 export default function SpeedGauge({ state }: SpeedGaugeProps) {
   const { phase, download_mbps, upload_mbps, latency_ms, jitter_ms, progress } = state;
+  const [selectedMetric, setSelectedMetric] = useState<MetricKey | null>(null);
+
+  // Reset selection when a new test starts
+  const prevPhase = useRef(phase);
+  useEffect(() => {
+    if (prevPhase.current === 'idle' && phase !== 'idle') {
+      setSelectedMetric(null);
+    }
+    prevPhase.current = phase;
+  }, [phase]);
 
   // Primary display value
   const displayValue =
@@ -40,7 +52,7 @@ export default function SpeedGauge({ state }: SpeedGaugeProps) {
     phase === 'download' ? getSmileFactor(download_mbps) :
     phase === 'upload' ? getSmileFactor(upload_mbps) :
     phase === 'complete' ? getSmileFactor(download_mbps) :
-    0; // neutral for idle/latency
+    0;
 
   // Target color
   const targetColor =
@@ -58,7 +70,6 @@ export default function SpeedGauge({ state }: SpeedGaugeProps) {
   const parseRgb = useCallback((color: string): [number, number, number] => {
     const m = color.match(/rgb\((\d+),(\d+),(\d+)\)/);
     if (m) return [+m[1], +m[2], +m[3]];
-    // hex fallback
     if (color.startsWith('#')) {
       const hex = color.slice(1);
       return [
@@ -71,11 +82,8 @@ export default function SpeedGauge({ state }: SpeedGaugeProps) {
   }, []);
 
   const buildPath = useCallback((factor: number): string => {
-    // SVG viewBox is 0 0 200 60
-    // Endpoints at y=30 (middle), control points move based on factor
-    // factor: -0.7 (frown, curve bows up) to +1.0 (smile, curve bows down)
     const baseY = 30;
-    const cpY = baseY + factor * 45; // positive factor = cp below baseline (smile in SVG), negative = above (frown)
+    const cpY = baseY + factor * 45;
     return `M 20 ${baseY} C 60 ${cpY}, 140 ${cpY}, 180 ${baseY}`;
   }, []);
 
@@ -104,17 +112,31 @@ export default function SpeedGauge({ state }: SpeedGaugeProps) {
     return () => cancelAnimationFrame(animFrame.current);
   }, [targetSmileFactor, targetColor, parseRgb, buildPath]);
 
-  // Smile curve progress (stroke fill)
-  const smileLength = 200; // approx cubic bezier length for our path
+  // Smile curve progress
+  const smileLength = 200;
   const smileProgress = phase === 'idle' ? 0 : phase === 'complete' ? 100 : progress;
   const smileDashoffset = smileLength - (smileProgress / 100) * smileLength;
 
-  // Tier badge (only on complete)
-  const tier = phase === 'complete' ? getSpeedTier(download_mbps) : null;
+  // Tier badge: show selected metric's tier, or download by default
+  function getActiveTier(): SpeedTier | null {
+    if (phase !== 'complete') return null;
+    switch (selectedMetric) {
+      case 'download': return getSpeedTier(download_mbps);
+      case 'upload':   return getUploadTier(upload_mbps);
+      case 'ping':     return getPingTier(latency_ms);
+      case 'jitter':   return getJitterTier(jitter_ms);
+      default:         return getSpeedTier(download_mbps);
+    }
+  }
+
+  const tier = getActiveTier();
+  const tierMetricLabel = selectedMetric
+    ? selectedMetric.charAt(0).toUpperCase() + selectedMetric.slice(1)
+    : 'Download';
 
   return (
     <div className="flex flex-col items-center gap-4">
-      {/* Speed number — primary display on TOP */}
+      {/* Speed number */}
       <div className="flex flex-col items-center">
         <span className="text-5xl sm:text-6xl font-bold text-white tabular-nums leading-none">
           {phase === 'idle' ? '--' : displayValue.toFixed(phase === 'latency' ? 0 : 1)}
@@ -138,7 +160,6 @@ export default function SpeedGauge({ state }: SpeedGaugeProps) {
       {/* SVG smile curve */}
       <div className="w-56 h-20">
         <svg viewBox="0 0 200 80" className="w-full h-full">
-          {/* Background track — neutral gray line */}
           <path
             d={buildPath(0)}
             fill="none"
@@ -146,7 +167,6 @@ export default function SpeedGauge({ state }: SpeedGaugeProps) {
             strokeWidth="8"
             strokeLinecap="round"
           />
-          {/* Active smile curve */}
           <path
             ref={pathRef}
             d={buildPath(0)}
@@ -161,9 +181,15 @@ export default function SpeedGauge({ state }: SpeedGaugeProps) {
         </svg>
       </div>
 
-      {/* Tier badge (complete only) */}
+      {/* Tier badge */}
       {tier && (
-        <SpeedTierBadge label={tier.label} color={tier.color} description={tier.description} />
+        <SpeedTierBadge
+          key={selectedMetric || 'download'}
+          metricLabel={tierMetricLabel}
+          label={tier.label}
+          color={tier.color}
+          description={tier.description}
+        />
       )}
 
       {/* 4-metric results grid */}
@@ -174,28 +200,36 @@ export default function SpeedGauge({ state }: SpeedGaugeProps) {
             value={download_mbps}
             unit="Mbps"
             active={phase === 'download'}
+            selected={phase === 'complete' && (selectedMetric === 'download' || selectedMetric === null)}
             color="#3b82f6"
+            onClick={phase === 'complete' ? () => setSelectedMetric('download') : undefined}
           />
           <ResultCard
             label="Upload"
             value={upload_mbps}
             unit="Mbps"
             active={phase === 'upload'}
+            selected={phase === 'complete' && selectedMetric === 'upload'}
             color="#8b5cf6"
+            onClick={phase === 'complete' ? () => setSelectedMetric('upload') : undefined}
           />
           <ResultCard
             label="Ping"
             value={latency_ms}
             unit="ms"
             active={phase === 'latency'}
+            selected={phase === 'complete' && selectedMetric === 'ping'}
             color="#f59e0b"
+            onClick={phase === 'complete' ? () => setSelectedMetric('ping') : undefined}
           />
           <ResultCard
             label="Jitter"
             value={jitter_ms}
             unit="ms"
             active={false}
+            selected={phase === 'complete' && selectedMetric === 'jitter'}
             color="#6b7280"
+            onClick={phase === 'complete' ? () => setSelectedMetric('jitter') : undefined}
           />
         </div>
       )}
@@ -204,10 +238,12 @@ export default function SpeedGauge({ state }: SpeedGaugeProps) {
 }
 
 function SpeedTierBadge({
+  metricLabel,
   label,
   color,
   description,
 }: {
+  metricLabel: string;
   label: string;
   color: string;
   description: string;
@@ -218,9 +254,10 @@ function SpeedTierBadge({
       style={{
         borderColor: `${color}40`,
         backgroundColor: `${color}10`,
-        animation: 'fadeIn 0.5s ease-out',
+        animation: 'fadeIn 0.3s ease-out',
       }}
     >
+      <span className="text-xs text-gray-500">{metricLabel}</span>
       <span className="text-sm font-semibold" style={{ color }}>
         &#x26A1; {label}
       </span>
@@ -236,20 +273,27 @@ function ResultCard({
   value,
   unit,
   active,
+  selected,
   color,
+  onClick,
 }: {
   label: string;
   value: number;
   unit: string;
   active: boolean;
+  selected: boolean;
   color: string;
+  onClick?: () => void;
 }) {
   return (
     <div
-      className={`flex flex-col items-center p-3 rounded-lg border ${
-        active ? 'border-opacity-50' : 'border-gray-700 border-opacity-30'
-      }`}
-      style={{ borderColor: active ? color : undefined }}
+      className={`flex flex-col items-center p-3 rounded-lg border transition-all ${
+        selected ? 'border-opacity-70 scale-105' :
+        active ? 'border-opacity-50' :
+        'border-gray-700 border-opacity-30'
+      } ${onClick ? 'cursor-pointer hover:scale-105' : ''}`}
+      style={{ borderColor: active || selected ? color : undefined }}
+      onClick={onClick}
     >
       <span className="text-xs text-gray-400">{label}</span>
       <span className="text-lg font-semibold text-white tabular-nums">

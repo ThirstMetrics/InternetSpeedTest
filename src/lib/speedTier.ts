@@ -24,6 +24,29 @@ export function getSpeedTier(downloadMbps: number): SpeedTier {
 /**
  * RGB-interpolated color from red (0 Mbps) → amber (25) → blue (50) → green (100+)
  */
+export function getUploadTier(uploadMbps: number): SpeedTier {
+  if (uploadMbps >= 50)  return { label: 'Ultra Fast', color: '#10b981', description: 'HD video uploads, cloud backups, live streaming' };
+  if (uploadMbps >= 25)  return { label: 'Very Fast',  color: '#10b981', description: 'Video calls, fast file sharing, cloud sync' };
+  if (uploadMbps >= 10)  return { label: 'Fast',       color: '#3b82f6', description: 'Smooth video calls, photo uploads, email' };
+  if (uploadMbps >= 5)   return { label: 'Moderate',   color: '#f59e0b', description: 'Basic video calls, slow file uploads' };
+  return                          { label: 'Slow',       color: '#ef4444', description: 'Email only, video calls may freeze' };
+}
+
+export function getPingTier(pingMs: number): SpeedTier {
+  if (pingMs <= 15)  return { label: 'Excellent', color: '#10b981', description: 'Competitive gaming, real-time trading' };
+  if (pingMs <= 30)  return { label: 'Great',     color: '#10b981', description: 'Online gaming, video calls, no lag' };
+  if (pingMs <= 60)  return { label: 'Good',      color: '#3b82f6', description: 'Smooth browsing, casual gaming' };
+  if (pingMs <= 100) return { label: 'Fair',      color: '#f59e0b', description: 'Noticeable delay on video calls' };
+  return                      { label: 'Poor',      color: '#ef4444', description: 'Laggy, video calls will stutter' };
+}
+
+export function getJitterTier(jitterMs: number): SpeedTier {
+  if (jitterMs <= 5)   return { label: 'Stable',    color: '#10b981', description: 'Rock-solid connection, great for calls' };
+  if (jitterMs <= 15)  return { label: 'Good',      color: '#10b981', description: 'Reliable for video and voice calls' };
+  if (jitterMs <= 30)  return { label: 'Fair',      color: '#f59e0b', description: 'Occasional hiccups on video calls' };
+  return                        { label: 'Unstable',  color: '#ef4444', description: 'Connection is inconsistent, expect drops' };
+}
+
 export function getSmileColor(downloadMbps: number): string {
   const stops: [number, [number, number, number]][] = [
     [0,   [239, 68, 68]],   // #ef4444
