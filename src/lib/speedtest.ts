@@ -70,7 +70,10 @@ async function measureDownload(onProgress: ProgressCallback, latency: number, ji
 
   const fetchChunk = async (): Promise<number> => {
     const cacheBust = `?t=${Date.now()}-${Math.random()}`;
-    const file = currentMbps > 20 ? '/test-files/25mb.bin' : '/test-files/5mb.bin';
+    let file: string;
+    if (currentMbps > 100) file = '/test-files/100mb.bin';
+    else if (currentMbps > 20) file = '/test-files/25mb.bin';
+    else file = '/test-files/5mb.bin';
     const response = await fetch(`${TEST_SERVER}${file}` + cacheBust, {
       cache: 'no-store',
       headers: { 'Accept-Encoding': 'identity' },
@@ -82,8 +85,9 @@ async function measureDownload(onProgress: ProgressCallback, latency: number, ji
   const startTime = performance.now();
 
   function getTargetConcurrency(): number {
-    if (currentMbps > 200) return 6;
-    if (currentMbps > 50) return 4;
+    if (currentMbps > 500) return 12;
+    if (currentMbps > 200) return 8;
+    if (currentMbps > 50) return 6;
     if (currentMbps > 10) return 3;
     return 2;
   }
@@ -139,8 +143,7 @@ async function measureUpload(
   downloadMbps: number
 ): Promise<number> {
   // Pre-generate random data before starting the clock
-  // Use 8MB chunks to reduce per-request overhead (PHP post_max_size is 10M)
-  const chunkSize = 8 * 1024 * 1024;
+  const chunkSize = 25 * 1024 * 1024;
   const randomData = new Uint8Array(chunkSize);
   for (let offset = 0; offset < chunkSize; offset += 65536) {
     const len = Math.min(65536, chunkSize - offset);
@@ -174,7 +177,8 @@ async function measureUpload(
   // Seed initial concurrency from download speed
   function getTargetConcurrency(): number {
     // Use max of current upload measurement and download-based estimate
-    const hint = Math.max(currentMbps, downloadMbps * 0.3);
+    const hint = Math.max(currentMbps, downloadMbps * 0.5);
+    if (hint > 500) return 12;
     if (hint > 200) return 8;
     if (hint > 100) return 6;
     if (hint > 50) return 4;
