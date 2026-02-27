@@ -71,7 +71,7 @@ async function measureDownload(onProgress: ProgressCallback, latency: number, ji
   const fetchChunk = async (): Promise<number> => {
     const cacheBust = `?t=${Date.now()}-${Math.random()}`;
     // Use larger file for faster connections to reduce HTTP overhead ratio
-    const url = currentMbps > 50 ? '/test-files/25mb.bin' : '/test-files/5mb.bin';
+    const url = currentMbps > 20 ? '/test-files/25mb.bin' : '/test-files/5mb.bin';
     const response = await fetch(url + cacheBust, {
       cache: 'no-store',
       headers: { 'Accept-Encoding': 'identity' }, // prevent compression inflating results
@@ -83,8 +83,8 @@ async function measureDownload(onProgress: ProgressCallback, latency: number, ji
   while (performance.now() - startTime < DOWNLOAD_DURATION_MS) {
     const elapsed = performance.now() - startTime;
 
-    // Conservative concurrency ramp: max 3 parallel streams
-    const concurrency = currentMbps > 100 ? 3 : currentMbps > 30 ? 2 : 1;
+    // Ramp concurrency to saturate the pipe (Ookla uses up to 16)
+    const concurrency = currentMbps > 200 ? 6 : currentMbps > 50 ? 4 : currentMbps > 10 ? 2 : 1;
 
     const promises = Array.from({ length: concurrency }, () => fetchChunk());
     const results = await Promise.all(promises);
@@ -118,7 +118,8 @@ async function measureUpload(
 
   // Use random data (not zeros) so compression can't artificially inflate throughput
   // crypto.getRandomValues has a 65536-byte limit per call, so fill in chunks
-  const chunkSize = 1 * 1024 * 1024; // 1MB
+  // 4MB chunks reduce HTTP overhead ratio vs 1MB (PHP post_max_size is 10MB)
+  const chunkSize = 4 * 1024 * 1024; // 4MB
   const randomData = new Uint8Array(chunkSize);
   for (let offset = 0; offset < chunkSize; offset += 65536) {
     const len = Math.min(65536, chunkSize - offset);
@@ -140,7 +141,8 @@ async function measureUpload(
   while (performance.now() - startTime < UPLOAD_DURATION_MS) {
     const elapsed = performance.now() - startTime;
 
-    const concurrency = currentMbps > 100 ? 3 : currentMbps > 30 ? 2 : 1;
+    // Ramp concurrency to saturate the pipe
+    const concurrency = currentMbps > 200 ? 6 : currentMbps > 50 ? 4 : currentMbps > 10 ? 2 : 1;
 
     const promises = Array.from({ length: concurrency }, () => uploadChunk());
     const results = await Promise.all(promises);
