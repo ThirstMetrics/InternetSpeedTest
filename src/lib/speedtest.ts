@@ -143,7 +143,8 @@ async function measureUpload(
   downloadMbps: number
 ): Promise<number> {
   // Pre-generate random data before starting the clock
-  const chunkSize = 25 * 1024 * 1024;
+  // Keep chunks small so progress updates frequently (4MB × high concurrency saturates pipe)
+  const chunkSize = 4 * 1024 * 1024;
   const randomData = new Uint8Array(chunkSize);
   for (let offset = 0; offset < chunkSize; offset += 65536) {
     const len = Math.min(65536, chunkSize - offset);
@@ -174,10 +175,10 @@ async function measureUpload(
     return result.received || chunkSize;
   };
 
-  // Seed initial concurrency from download speed
+  // Seed initial concurrency from download speed (upload is typically 10-30% of download)
   function getTargetConcurrency(): number {
-    // Use max of current upload measurement and download-based estimate
-    const hint = Math.max(currentMbps, downloadMbps * 0.5);
+    // Once we have measured upload data, use that; otherwise estimate conservatively
+    const hint = currentMbps > 0 ? currentMbps : downloadMbps * 0.15;
     if (hint > 500) return 12;
     if (hint > 200) return 8;
     if (hint > 100) return 6;
