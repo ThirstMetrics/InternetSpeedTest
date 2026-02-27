@@ -7,6 +7,10 @@ const LATENCY_ROUNDS = 10;
 const DOWNLOAD_DURATION_MS = 10000;
 const UPLOAD_DURATION_MS = 10000;
 
+// Dedicated speed test server (SF DigitalOcean droplet) for accurate measurements.
+// Falls back to the app server if not configured.
+const TEST_SERVER = process.env.NEXT_PUBLIC_TEST_SERVER || '';
+
 function createState(overrides: Partial<SpeedTestState>): SpeedTestState {
   return {
     phase: 'idle',
@@ -40,7 +44,7 @@ async function measureLatency(onProgress: ProgressCallback): Promise<{ latency: 
 
   for (let i = 0; i < LATENCY_ROUNDS; i++) {
     const start = performance.now();
-    await fetch(apiUrl('/api/speedtest/ping'), { cache: 'no-store' });
+    await fetch(`${TEST_SERVER}/api/speedtest/ping`, { cache: 'no-store' });
     const elapsed = performance.now() - start;
     latencies.push(elapsed);
 
@@ -66,8 +70,8 @@ async function measureDownload(onProgress: ProgressCallback, latency: number, ji
 
   const fetchChunk = async (): Promise<number> => {
     const cacheBust = `?t=${Date.now()}-${Math.random()}`;
-    const url = currentMbps > 20 ? '/test-files/25mb.bin' : '/test-files/5mb.bin';
-    const response = await fetch(url + cacheBust, {
+    const file = currentMbps > 20 ? '/test-files/25mb.bin' : '/test-files/5mb.bin';
+    const response = await fetch(`${TEST_SERVER}${file}` + cacheBust, {
       cache: 'no-store',
       headers: { 'Accept-Encoding': 'identity' },
     });
@@ -147,7 +151,7 @@ async function measureUpload(
   // Warm up the connection before starting the clock
   const warmup = new Uint8Array(1024);
   crypto.getRandomValues(warmup);
-  await fetch(apiUrl('/api/speedtest/upload'), {
+  await fetch(`${TEST_SERVER}/api/speedtest/upload`, {
     method: 'POST',
     body: new Blob([warmup]),
     headers: { 'Content-Type': 'application/octet-stream' },
@@ -158,7 +162,7 @@ async function measureUpload(
   let activeCount = 0;
 
   const uploadChunk = async (): Promise<number> => {
-    const resp = await fetch(apiUrl('/api/speedtest/upload'), {
+    const resp = await fetch(`${TEST_SERVER}/api/speedtest/upload`, {
       method: 'POST',
       body: uploadBlob,
       headers: { 'Content-Type': 'application/octet-stream' },
