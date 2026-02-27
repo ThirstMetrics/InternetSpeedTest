@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { getMapViewsRemaining, incrementMapViews, hasMapViewsRemaining } from '@/lib/storage';
+import { getMapViewsRemaining, incrementMapViews } from '@/lib/storage';
 import { apiUrl } from '@/lib/api';
 
 interface MapLocation {
@@ -24,13 +24,45 @@ interface SpeedMapProps {
   onAuthRequired?: () => void;
 }
 
+function toGeoJSON(locations: MapLocation[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: locations.map((loc) => ({
+      type: 'Feature' as const,
+      properties: {
+        download_mbps: loc.avg_download_mbps,
+        upload_mbps: loc.avg_upload_mbps,
+        latency_ms: loc.avg_latency_ms,
+        test_count: loc.test_count,
+        business_name: loc.business_name || '',
+        tier: loc.tier,
+      },
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [loc.longitude, loc.latitude],
+      },
+    })),
+  };
+}
+
 export default function SpeedMap({ isAuthenticated, onAuthRequired }: SpeedMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
+  const mapLoaded = useRef(false);
+  const locationsRef = useRef<MapLocation[]>([]);
   const [viewsRemaining, setViewsRemaining] = useState(10);
   const [gated, setGated] = useState(false);
-  const [locations, setLocations] = useState<MapLocation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Push data to the map source (called from both load callback and data fetch)
+  const applyLocations = useCallback((locs: MapLocation[]) => {
+    if (!map.current || !mapLoaded.current) return;
+    const source = map.current.getSource('speed-tests') as mapboxgl.GeoJSONSource | undefined;
+    if (source) {
+      source.setData(toGeoJSON(locs));
+    }
+  }, []);
 
   // Check map view gate
   useEffect(() => {
@@ -55,25 +87,36 @@ export default function SpeedMap({ isAuthenticated, onAuthRequired }: SpeedMapPr
 
     async function fetchLocations() {
       try {
-        const res = await fetch(apiUrl('/api/locations?lat=36.1699&lng=-115.1398&radius=25'));
+        const url = apiUrl('/api/locations?lat=36.1699&lng=-115.1398&radius=25');
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
         const data = await res.json();
-        setLocations(data.locations || []);
+        const locs = data.locations || [];
+        locationsRef.current = locs;
+        applyLocations(locs);
       } catch (err) {
         console.error('Failed to fetch locations:', err);
+        setError('Could not load location data');
       } finally {
         setLoading(false);
       }
     }
 
     fetchLocations();
-  }, [gated]);
+  }, [gated, applyLocations]);
 
   // Initialize map
   useEffect(() => {
     if (gated || !mapContainer.current || map.current) return;
 
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-    if (!token) return;
+    if (!token) {
+      setError('Map configuration missing');
+      setLoading(false);
+      return;
+    }
 
     mapboxgl.accessToken = token;
 
@@ -95,8 +138,8 @@ export default function SpeedMap({ isAuthenticated, onAuthRequired }: SpeedMapPr
 
     map.current.on('load', () => {
       if (!map.current) return;
+      mapLoaded.current = true;
 
-      // Add heatmap source (initially empty, updated when locations load)
       map.current.addSource('speed-tests', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -109,19 +152,13 @@ export default function SpeedMap({ isAuthenticated, onAuthRequired }: SpeedMapPr
         source: 'speed-tests',
         maxzoom: 15,
         paint: {
-          // Weight by download speed (higher speed = more intensity)
           'heatmap-weight': [
             'interpolate', ['linear'], ['get', 'download_mbps'],
-            0, 0,
-            25, 0.3,
-            50, 0.5,
-            100, 0.8,
-            200, 1,
+            0, 0, 25, 0.3, 50, 0.5, 100, 0.8, 200, 1,
           ],
           'heatmap-intensity': [
             'interpolate', ['linear'], ['zoom'],
-            0, 1,
-            15, 3,
+            0, 1, 15, 3,
           ],
           'heatmap-color': [
             'interpolate', ['linear'], ['heatmap-density'],
@@ -135,14 +172,11 @@ export default function SpeedMap({ isAuthenticated, onAuthRequired }: SpeedMapPr
           ],
           'heatmap-radius': [
             'interpolate', ['linear'], ['zoom'],
-            0, 2,
-            15, 30,
+            0, 2, 15, 30,
           ],
-          // Fade out heatmap at high zoom
           'heatmap-opacity': [
             'interpolate', ['linear'], ['zoom'],
-            13, 1,
-            15, 0,
+            13, 1, 15, 0,
           ],
         },
       });
@@ -156,23 +190,21 @@ export default function SpeedMap({ isAuthenticated, onAuthRequired }: SpeedMapPr
         paint: {
           'circle-radius': [
             'interpolate', ['linear'], ['zoom'],
-            13, 4,
-            18, 12,
+            13, 4, 18, 12,
           ],
           'circle-color': [
             'interpolate', ['linear'], ['get', 'download_mbps'],
-            0, '#ef4444',     // Red = slow
-            25, '#f59e0b',    // Orange
-            50, '#3b82f6',    // Blue
-            100, '#10b981',   // Green = fast
+            0, '#ef4444',
+            25, '#f59e0b',
+            50, '#3b82f6',
+            100, '#10b981',
             200, '#10b981',
           ],
           'circle-stroke-color': '#ffffff',
           'circle-stroke-width': 1,
           'circle-opacity': [
             'interpolate', ['linear'], ['zoom'],
-            13, 0,
-            14, 1,
+            13, 0, 14, 1,
           ],
         },
       });
@@ -180,7 +212,6 @@ export default function SpeedMap({ isAuthenticated, onAuthRequired }: SpeedMapPr
       // Popup on click
       map.current.on('click', 'speed-points', (e) => {
         if (!e.features?.length || !map.current) return;
-
         const feature = e.features[0];
         const props = feature.properties;
         const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
@@ -200,49 +231,31 @@ export default function SpeedMap({ isAuthenticated, onAuthRequired }: SpeedMapPr
           .addTo(map.current);
       });
 
-      // Cursor on hover
       map.current.on('mouseenter', 'speed-points', () => {
         if (map.current) map.current.getCanvas().style.cursor = 'pointer';
       });
       map.current.on('mouseleave', 'speed-points', () => {
         if (map.current) map.current.getCanvas().style.cursor = '';
       });
+
+      // Apply any locations that arrived before map loaded
+      if (locationsRef.current.length > 0) {
+        applyLocations(locationsRef.current);
+      }
+
+      setLoading(false);
+    });
+
+    map.current.on('error', (e) => {
+      console.error('Mapbox error:', e.error);
     });
 
     return () => {
+      mapLoaded.current = false;
       map.current?.remove();
       map.current = null;
     };
-  }, [gated]);
-
-  // Update map data when locations change
-  useEffect(() => {
-    if (!map.current || locations.length === 0) return;
-
-    const geojson: GeoJSON.FeatureCollection = {
-      type: 'FeatureCollection',
-      features: locations.map((loc) => ({
-        type: 'Feature' as const,
-        properties: {
-          download_mbps: loc.avg_download_mbps,
-          upload_mbps: loc.avg_upload_mbps,
-          latency_ms: loc.avg_latency_ms,
-          test_count: loc.test_count,
-          business_name: loc.business_name || '',
-          tier: loc.tier,
-        },
-        geometry: {
-          type: 'Point' as const,
-          coordinates: [loc.longitude, loc.latitude],
-        },
-      })),
-    };
-
-    const source = map.current.getSource('speed-tests') as mapboxgl.GeoJSONSource;
-    if (source) {
-      source.setData(geojson);
-    }
-  }, [locations]);
+  }, [gated, applyLocations]);
 
   // Gated view
   if (gated) {
@@ -275,6 +288,12 @@ export default function SpeedMap({ isAuthenticated, onAuthRequired }: SpeedMapPr
       {loading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/50">
           <div className="text-gray-400 text-sm">Loading map...</div>
+        </div>
+      )}
+
+      {error && (
+        <div className="absolute top-3 right-3 z-10 bg-red-900/80 backdrop-blur px-3 py-1 rounded-full text-xs text-red-300">
+          {error}
         </div>
       )}
 
