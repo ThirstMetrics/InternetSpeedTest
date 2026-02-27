@@ -23,7 +23,6 @@ function createState(overrides: Partial<SpeedTestState>): SpeedTestState {
 async function countStreamBytes(response: Response): Promise<number> {
   const reader = response.body?.getReader();
   if (!reader) {
-    // Fallback to Content-Length if streaming not available
     const blob = await response.blob();
     return blob.size;
   }
@@ -52,55 +51,78 @@ async function measureLatency(onProgress: ProgressCallback): Promise<{ latency: 
     }));
   }
 
-  // Drop highest and lowest, average the rest
   latencies.sort((a, b) => a - b);
   const trimmed = latencies.slice(1, -1);
   const avg = trimmed.reduce((sum, v) => sum + v, 0) / trimmed.length;
-
-  // Jitter = average deviation from the mean
   const jitter = trimmed.reduce((sum, v) => sum + Math.abs(v - avg), 0) / trimmed.length;
 
   return { latency: Math.round(avg), jitter: Math.round(jitter) };
 }
 
 async function measureDownload(onProgress: ProgressCallback, latency: number, jitter: number): Promise<number> {
-  const startTime = performance.now();
   let totalBytes = 0;
   let currentMbps = 0;
+  let activeCount = 0;
 
   const fetchChunk = async (): Promise<number> => {
     const cacheBust = `?t=${Date.now()}-${Math.random()}`;
-    // Use larger file for faster connections to reduce HTTP overhead ratio
     const url = currentMbps > 20 ? '/test-files/25mb.bin' : '/test-files/5mb.bin';
     const response = await fetch(url + cacheBust, {
       cache: 'no-store',
-      headers: { 'Accept-Encoding': 'identity' }, // prevent compression inflating results
+      headers: { 'Accept-Encoding': 'identity' },
     });
-    // Stream body to count actual bytes received on the wire
     return countStreamBytes(response);
   };
 
-  while (performance.now() - startTime < DOWNLOAD_DURATION_MS) {
-    const elapsed = performance.now() - startTime;
+  // Continuous pipeline: keep N connections busy at all times
+  const startTime = performance.now();
 
-    // Ramp concurrency to saturate the pipe (Ookla uses up to 16)
-    const concurrency = currentMbps > 200 ? 6 : currentMbps > 50 ? 4 : currentMbps > 10 ? 2 : 1;
-
-    const promises = Array.from({ length: concurrency }, () => fetchChunk());
-    const results = await Promise.all(promises);
-    totalBytes += results.reduce((sum, bytes) => sum + bytes, 0);
-
-    const elapsedSec = (performance.now() - startTime) / 1000;
-    currentMbps = (totalBytes * 8) / (1_000_000 * elapsedSec);
-
-    onProgress(createState({
-      phase: 'download',
-      progress: Math.min(99, Math.round((elapsed / DOWNLOAD_DURATION_MS) * 100)),
-      download_mbps: Math.round(currentMbps * 100) / 100,
-      latency_ms: latency,
-      jitter_ms: jitter,
-    }));
+  function getTargetConcurrency(): number {
+    if (currentMbps > 200) return 6;
+    if (currentMbps > 50) return 4;
+    if (currentMbps > 10) return 3;
+    return 2;
   }
+
+  await new Promise<void>((resolve) => {
+    function launchOne() {
+      if (performance.now() - startTime >= DOWNLOAD_DURATION_MS) {
+        if (activeCount === 0) resolve();
+        return;
+      }
+      activeCount++;
+      fetchChunk().then((bytes) => {
+        activeCount--;
+        totalBytes += bytes;
+
+        const elapsedSec = (performance.now() - startTime) / 1000;
+        currentMbps = (totalBytes * 8) / (1_000_000 * elapsedSec);
+        const elapsed = performance.now() - startTime;
+
+        onProgress(createState({
+          phase: 'download',
+          progress: Math.min(99, Math.round((elapsed / DOWNLOAD_DURATION_MS) * 100)),
+          download_mbps: Math.round(currentMbps * 100) / 100,
+          latency_ms: latency,
+          jitter_ms: jitter,
+        }));
+
+        // Immediately launch replacement to keep pipe full
+        launchOne();
+        // Also ramp up if we need more concurrency
+        while (activeCount < getTargetConcurrency() && performance.now() - startTime < DOWNLOAD_DURATION_MS) {
+          launchOne();
+        }
+      }).catch(() => {
+        activeCount--;
+        if (activeCount === 0 && performance.now() - startTime >= DOWNLOAD_DURATION_MS) resolve();
+      });
+    }
+
+    // Start initial connections
+    const initial = 2;
+    for (let i = 0; i < initial; i++) launchOne();
+  });
 
   const totalElapsedSec = (performance.now() - startTime) / 1000;
   return Math.round(((totalBytes * 8) / (1_000_000 * totalElapsedSec)) * 100) / 100;
@@ -112,54 +134,93 @@ async function measureUpload(
   jitter: number,
   downloadMbps: number
 ): Promise<number> {
-  const startTime = performance.now();
-  let totalBytes = 0;
-  let currentMbps = 0;
-
-  // Use random data (not zeros) so compression can't artificially inflate throughput
-  // crypto.getRandomValues has a 65536-byte limit per call, so fill in chunks
-  // 4MB chunks reduce HTTP overhead ratio vs 1MB (PHP post_max_size is 10MB)
-  const chunkSize = 4 * 1024 * 1024; // 4MB
+  // Pre-generate random data before starting the clock
+  // Use 8MB chunks to reduce per-request overhead (PHP post_max_size is 10M)
+  const chunkSize = 8 * 1024 * 1024;
   const randomData = new Uint8Array(chunkSize);
   for (let offset = 0; offset < chunkSize; offset += 65536) {
     const len = Math.min(65536, chunkSize - offset);
     crypto.getRandomValues(randomData.subarray(offset, offset + len));
   }
-  const uploadData = new Blob([randomData]);
+  const uploadBlob = new Blob([randomData]);
+
+  // Warm up the connection before starting the clock
+  const warmup = new Uint8Array(1024);
+  crypto.getRandomValues(warmup);
+  await fetch(apiUrl('/api/speedtest/upload'), {
+    method: 'POST',
+    body: new Blob([warmup]),
+    headers: { 'Content-Type': 'application/octet-stream' },
+  });
+
+  let totalBytes = 0;
+  let currentMbps = 0;
+  let activeCount = 0;
 
   const uploadChunk = async (): Promise<number> => {
     const resp = await fetch(apiUrl('/api/speedtest/upload'), {
       method: 'POST',
-      body: uploadData,
+      body: uploadBlob,
       headers: { 'Content-Type': 'application/octet-stream' },
     });
-    // Use server-reported bytes received for accuracy
     const result = await resp.json();
     return result.received || chunkSize;
   };
 
-  while (performance.now() - startTime < UPLOAD_DURATION_MS) {
-    const elapsed = performance.now() - startTime;
-
-    // Ramp concurrency to saturate the pipe
-    const concurrency = currentMbps > 200 ? 6 : currentMbps > 50 ? 4 : currentMbps > 10 ? 2 : 1;
-
-    const promises = Array.from({ length: concurrency }, () => uploadChunk());
-    const results = await Promise.all(promises);
-    totalBytes += results.reduce((sum, bytes) => sum + bytes, 0);
-
-    const elapsedSec = (performance.now() - startTime) / 1000;
-    currentMbps = (totalBytes * 8) / (1_000_000 * elapsedSec);
-
-    onProgress(createState({
-      phase: 'upload',
-      progress: Math.min(99, Math.round((elapsed / UPLOAD_DURATION_MS) * 100)),
-      download_mbps: downloadMbps,
-      upload_mbps: Math.round(currentMbps * 100) / 100,
-      latency_ms: latency,
-      jitter_ms: jitter,
-    }));
+  // Seed initial concurrency from download speed
+  function getTargetConcurrency(): number {
+    // Use max of current upload measurement and download-based estimate
+    const hint = Math.max(currentMbps, downloadMbps * 0.3);
+    if (hint > 200) return 8;
+    if (hint > 100) return 6;
+    if (hint > 50) return 4;
+    if (hint > 10) return 3;
+    return 2;
   }
+
+  // Start clock AFTER data generation and warmup
+  const startTime = performance.now();
+
+  await new Promise<void>((resolve) => {
+    function launchOne() {
+      if (performance.now() - startTime >= UPLOAD_DURATION_MS) {
+        if (activeCount === 0) resolve();
+        return;
+      }
+      activeCount++;
+      uploadChunk().then((bytes) => {
+        activeCount--;
+        totalBytes += bytes;
+
+        const elapsedSec = (performance.now() - startTime) / 1000;
+        currentMbps = (totalBytes * 8) / (1_000_000 * elapsedSec);
+        const elapsed = performance.now() - startTime;
+
+        onProgress(createState({
+          phase: 'upload',
+          progress: Math.min(99, Math.round((elapsed / UPLOAD_DURATION_MS) * 100)),
+          download_mbps: downloadMbps,
+          upload_mbps: Math.round(currentMbps * 100) / 100,
+          latency_ms: latency,
+          jitter_ms: jitter,
+        }));
+
+        // Immediately launch replacement to keep pipe full
+        launchOne();
+        // Ramp up if needed
+        while (activeCount < getTargetConcurrency() && performance.now() - startTime < UPLOAD_DURATION_MS) {
+          launchOne();
+        }
+      }).catch(() => {
+        activeCount--;
+        if (activeCount === 0 && performance.now() - startTime >= UPLOAD_DURATION_MS) resolve();
+      });
+    }
+
+    // Start with seeded concurrency
+    const initial = getTargetConcurrency();
+    for (let i = 0; i < initial; i++) launchOne();
+  });
 
   const totalElapsedSec = (performance.now() - startTime) / 1000;
   return Math.round(((totalBytes * 8) / (1_000_000 * totalElapsedSec)) * 100) / 100;
