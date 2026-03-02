@@ -68,6 +68,11 @@ async function measureDownload(onProgress: ProgressCallback, latency: number, ji
   let currentMbps = 0;
   let activeCount = 0;
 
+  // Track ramp-up discard (same approach as Ookla: ignore first 2s)
+  const RAMP_UP_MS = 2000;
+  let bytesAtRampEnd = 0;
+  let rampEndMarked = false;
+
   const fetchChunk = async (): Promise<number> => {
     const cacheBust = `?t=${Date.now()}-${Math.random()}`;
     let file: string;
@@ -81,7 +86,6 @@ async function measureDownload(onProgress: ProgressCallback, latency: number, ji
     return countStreamBytes(response);
   };
 
-  // Continuous pipeline: keep N connections busy at all times
   const startTime = performance.now();
 
   function getTargetConcurrency(): number {
@@ -103,9 +107,21 @@ async function measureDownload(onProgress: ProgressCallback, latency: number, ji
         activeCount--;
         totalBytes += bytes;
 
-        const elapsedSec = (performance.now() - startTime) / 1000;
-        currentMbps = (totalBytes * 8) / (1_000_000 * elapsedSec);
         const elapsed = performance.now() - startTime;
+
+        if (!rampEndMarked && elapsed >= RAMP_UP_MS) {
+          bytesAtRampEnd = totalBytes;
+          rampEndMarked = true;
+        }
+
+        const elapsedSec = elapsed / 1000;
+        if (rampEndMarked) {
+          const settledBytes = totalBytes - bytesAtRampEnd;
+          const settledSec = (elapsed - RAMP_UP_MS) / 1000;
+          currentMbps = settledSec > 0 ? (settledBytes * 8) / (1_000_000 * settledSec) : 0;
+        } else {
+          currentMbps = (totalBytes * 8) / (1_000_000 * elapsedSec);
+        }
 
         onProgress(createState({
           phase: 'download',
@@ -115,9 +131,7 @@ async function measureDownload(onProgress: ProgressCallback, latency: number, ji
           jitter_ms: jitter,
         }));
 
-        // Immediately launch replacement to keep pipe full
         launchOne();
-        // Also ramp up if we need more concurrency
         while (activeCount < getTargetConcurrency() && performance.now() - startTime < DOWNLOAD_DURATION_MS) {
           launchOne();
         }
@@ -127,11 +141,15 @@ async function measureDownload(onProgress: ProgressCallback, latency: number, ji
       });
     }
 
-    // Start initial connections
     const initial = 2;
     for (let i = 0; i < initial; i++) launchOne();
   });
 
+  if (rampEndMarked) {
+    const settledBytes = totalBytes - bytesAtRampEnd;
+    const settledSec = (performance.now() - startTime - RAMP_UP_MS) / 1000;
+    return Math.round(((settledBytes * 8) / (1_000_000 * settledSec)) * 100) / 100;
+  }
   const totalElapsedSec = (performance.now() - startTime) / 1000;
   return Math.round(((totalBytes * 8) / (1_000_000 * totalElapsedSec)) * 100) / 100;
 }
@@ -142,8 +160,6 @@ async function measureUpload(
   jitter: number,
   downloadMbps: number
 ): Promise<number> {
-  // Pre-generate random data before starting the clock
-  // Keep chunks small so progress updates frequently (4MB × high concurrency saturates pipe)
   const chunkSize = 4 * 1024 * 1024;
   const randomData = new Uint8Array(chunkSize);
   for (let offset = 0; offset < chunkSize; offset += 65536) {
@@ -152,42 +168,46 @@ async function measureUpload(
   }
   const uploadBlob = new Blob([randomData]);
 
-  // Warm up the connection before starting the clock
-  const warmup = new Uint8Array(1024);
+  const uploadUrl = `${TEST_SERVER}/api/speedtest/upload`;
+  const uploadHeaders = { 'Content-Type': 'application/octet-stream' };
+
+  // Warm up 3 HTTP/2 streams before starting the clock
+  const warmup = new Uint8Array(4096);
   crypto.getRandomValues(warmup);
-  await fetch(`${TEST_SERVER}/api/speedtest/upload`, {
-    method: 'POST',
-    body: new Blob([warmup]),
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
+  await Promise.all([
+    fetch(uploadUrl, { method: 'POST', body: new Blob([warmup]), headers: uploadHeaders }),
+    fetch(uploadUrl, { method: 'POST', body: new Blob([warmup]), headers: uploadHeaders }),
+    fetch(uploadUrl, { method: 'POST', body: new Blob([warmup]), headers: uploadHeaders }),
+  ]);
 
   let totalBytes = 0;
   let currentMbps = 0;
   let activeCount = 0;
 
+  // Track cumulative bytes at each completion for ramp-up discard
+  const RAMP_UP_MS = 2000;
+  let bytesAtRampEnd = 0;
+  let rampEndMarked = false;
+
   const uploadChunk = async (): Promise<number> => {
-    const resp = await fetch(`${TEST_SERVER}/api/speedtest/upload`, {
+    const resp = await fetch(uploadUrl, {
       method: 'POST',
       body: uploadBlob,
-      headers: { 'Content-Type': 'application/octet-stream' },
+      headers: uploadHeaders,
     });
     const result = await resp.json();
     return result.received || chunkSize;
   };
 
-  // Seed initial concurrency from download speed (upload is typically 10-30% of download)
   function getTargetConcurrency(): number {
-    // Once we have measured upload data, use that; otherwise estimate conservatively
-    const hint = currentMbps > 0 ? currentMbps : downloadMbps * 0.15;
+    const hint = currentMbps > 0 ? currentMbps : downloadMbps * 0.3;
     if (hint > 500) return 12;
     if (hint > 200) return 8;
     if (hint > 100) return 6;
     if (hint > 50) return 4;
-    if (hint > 10) return 3;
-    return 2;
+    return 3;
   }
 
-  // Start clock AFTER data generation and warmup
   const startTime = performance.now();
 
   await new Promise<void>((resolve) => {
@@ -201,9 +221,23 @@ async function measureUpload(
         activeCount--;
         totalBytes += bytes;
 
-        const elapsedSec = (performance.now() - startTime) / 1000;
-        currentMbps = (totalBytes * 8) / (1_000_000 * elapsedSec);
         const elapsed = performance.now() - startTime;
+
+        // Mark the ramp-up boundary
+        if (!rampEndMarked && elapsed >= RAMP_UP_MS) {
+          bytesAtRampEnd = totalBytes;
+          rampEndMarked = true;
+        }
+
+        // Display speed: use post-ramp settled speed when available
+        const elapsedSec = elapsed / 1000;
+        if (rampEndMarked) {
+          const settledBytes = totalBytes - bytesAtRampEnd;
+          const settledSec = (elapsed - RAMP_UP_MS) / 1000;
+          currentMbps = settledSec > 0 ? (settledBytes * 8) / (1_000_000 * settledSec) : 0;
+        } else {
+          currentMbps = (totalBytes * 8) / (1_000_000 * elapsedSec);
+        }
 
         onProgress(createState({
           phase: 'upload',
@@ -214,9 +248,7 @@ async function measureUpload(
           jitter_ms: jitter,
         }));
 
-        // Immediately launch replacement to keep pipe full
         launchOne();
-        // Ramp up if needed
         while (activeCount < getTargetConcurrency() && performance.now() - startTime < UPLOAD_DURATION_MS) {
           launchOne();
         }
@@ -226,11 +258,17 @@ async function measureUpload(
       });
     }
 
-    // Start with seeded concurrency
-    const initial = getTargetConcurrency();
+    // Start with minimum 3 connections
+    const initial = Math.max(3, getTargetConcurrency());
     for (let i = 0; i < initial; i++) launchOne();
   });
 
+  // Final result: use settled speed (post-ramp-up) if available
+  if (rampEndMarked) {
+    const settledBytes = totalBytes - bytesAtRampEnd;
+    const settledSec = (performance.now() - startTime - RAMP_UP_MS) / 1000;
+    return Math.round(((settledBytes * 8) / (1_000_000 * settledSec)) * 100) / 100;
+  }
   const totalElapsedSec = (performance.now() - startTime) / 1000;
   return Math.round(((totalBytes * 8) / (1_000_000 * totalElapsedSec)) * 100) / 100;
 }
