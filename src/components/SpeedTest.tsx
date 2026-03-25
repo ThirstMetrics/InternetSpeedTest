@@ -43,15 +43,15 @@ export default function SpeedTest({ onComplete }: SpeedTestProps) {
       return;
     }
 
-    // Check geofence
-    if (!isWithinGeofence(pos.latitude, pos.longitude)) {
+    // Check geofence (skip on localhost for dev testing)
+    const onLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (!onLocalDev && !isWithinGeofence(pos.latitude, pos.longitude)) {
       setLocationError('SpeedTest is currently available in the Las Vegas metro area. Coming soon to your area!');
       return;
     }
 
     // Detect localhost — results won't reflect real internet speed
-    const onLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    setIsLocalhost(onLocalhost);
+    setIsLocalhost(onLocalDev);
 
     // Run speed test
     const result = await runSpeedTest(setState);
@@ -111,21 +111,45 @@ export default function SpeedTest({ onComplete }: SpeedTestProps) {
     <div className="flex flex-col items-center gap-6 w-full">
       <SpeedGauge state={state} />
 
-      {/* Public WiFi toggle */}
-      <label className="flex items-center gap-3 cursor-pointer select-none">
-        <div className="relative">
-          <input
-            type="checkbox"
-            checked={isPublicWifi}
-            onChange={(e) => setIsPublicWifi(e.target.checked)}
+      {/* Network type selector */}
+      <div className="w-full max-w-xs">
+        <div className="flex rounded-xl border border-gray-700 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setIsPublicWifi(false)}
             disabled={isRunning}
-            className="sr-only peer"
-          />
-          <div className="w-10 h-5 bg-gray-700 rounded-full peer-checked:bg-blue-600 transition-colors" />
-          <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full peer-checked:translate-x-5 transition-transform" />
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+              !isPublicWifi
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-800/50 text-gray-400 hover:text-gray-200'
+            } ${isRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+              <polyline points="9 22 9 12 15 12 15 22" />
+            </svg>
+            Home / Private
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsPublicWifi(true)}
+            disabled={isRunning}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+              isPublicWifi
+                ? 'bg-green-600 text-white'
+                : 'bg-gray-800/50 text-gray-400 hover:text-gray-200'
+            } ${isRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12.55a11 11 0 0114.08 0" />
+              <path d="M1.42 9a16 16 0 0121.16 0" />
+              <path d="M8.53 16.11a6 6 0 016.95 0" />
+              <circle cx="12" cy="20" r="1" fill="currentColor" />
+            </svg>
+            Public WiFi
+          </button>
         </div>
-        <span className="text-sm text-gray-300">This is public WiFi</span>
-      </label>
+      </div>
 
       {/* Location error */}
       {locationError && (
