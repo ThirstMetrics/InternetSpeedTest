@@ -58,7 +58,7 @@ export default function SpeedTest({ onComplete }: SpeedTestProps) {
 
     if (result.phase === 'complete' && !result.error) {
       // Don't save localhost results — they measure local I/O, not internet speed
-      if (onLocalhost) {
+      if (onLocalDev) {
         onComplete?.(result, pos);
         return;
       }
