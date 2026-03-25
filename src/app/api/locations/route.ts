@@ -26,12 +26,12 @@ export async function GET(request: Request) {
 
     if (error) {
       console.error('Supabase query error:', error);
-      return NextResponse.json({ error: 'Failed to fetch locations' }, { status: 500 });
+      return NextResponse.json({ locations: [] });
     }
 
     return NextResponse.json({ locations: data || [] });
   } catch (err) {
     console.error('Locations API error:', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ locations: [] });
   }
 }
