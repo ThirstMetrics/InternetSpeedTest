@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getSupabase } from '@/lib/supabase';
 
 export interface HistoryEntry {
   id?: string;
@@ -69,24 +68,15 @@ export default function TestHistory({ userId, onSelectTest }: TestHistoryProps) 
       setLoading(true);
       try {
         if (userId) {
-          // Fetch from Supabase for authenticated users
-          const supabase = getSupabase();
-          if (!supabase) { setHistory(getLocalHistory()); setLoading(false); return; }
-          const { data, error } = await supabase
-            .from('speed_tests')
-            .select('*')
-            .eq('user_id', userId)
-            .order('created_at', { ascending: false })
-            .limit(20);
-
-          if (error) {
-            console.error('Failed to fetch history from Supabase:', error);
-            setHistory([]);
+          const res = await fetch('/api/history');
+          if (res.ok) {
+            const data = await res.json();
+            setHistory(data.history || []);
           } else {
-            setHistory(data || []);
+            console.error('Failed to fetch history:', res.status);
+            setHistory([]);
           }
         } else {
-          // Fetch from localStorage for guests
           setHistory(getLocalHistory());
         }
       } catch (error) {

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { getSupabase } from '@/lib/supabase';
+import { useState, useCallback } from 'react';
+import { useSession, signOut } from 'next-auth/react';
 import SpeedTest from '@/components/SpeedTest';
 import SpeedMap from '@/components/SpeedMap';
 import AuthModal from '@/components/AuthModal';
@@ -14,34 +14,13 @@ type Tab = 'test' | 'map';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('test');
-  const [user, setUser] = useState<any>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const { data: session } = useSession();
+  const user = session?.user;
 
-  // Check auth state on mount
-  useEffect(() => {
-    const supabase = getSupabase();
-    if (!supabase) return;
-
-    supabase.auth.getUser().then(({ data }) => {
-      if (data.user) setUser(data.user);
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const handleSignOut = async () => {
-    const supabase = getSupabase();
-    if (!supabase) return;
-    await supabase.auth.signOut();
-    setUser(null);
-  };
+  const handleSignOut = () => signOut();
 
   const handleTestComplete = useCallback((result: SpeedTestState, position: GeoPosition) => {
-    // Save to local history for guest users
     saveTestToHistory({
       download_mbps: result.download_mbps,
       upload_mbps: result.upload_mbps,
@@ -150,8 +129,12 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="border-t border-gray-800 mt-auto">
-        <div className="max-w-4xl mx-auto px-4 py-4 text-center text-xs text-gray-600">
-          SpeedTest by ThirstMetrics &middot; Las Vegas, NV
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-center gap-4 text-xs text-gray-600">
+          <span>SpeedTest by ThirstMetrics</span>
+          <span>&middot;</span>
+          <a href="/privacy" className="hover:text-gray-400 transition-colors">Privacy</a>
+          <span>&middot;</span>
+          <a href="/terms" className="hover:text-gray-400 transition-colors">Terms</a>
         </div>
       </footer>
 
@@ -159,7 +142,6 @@ export default function Home() {
       <AuthModal
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
-        onAuthSuccess={(authUser) => setUser(authUser)}
       />
     </div>
   );

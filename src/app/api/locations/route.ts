@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
-import { getSupabase } from '@/lib/supabase';
+import { getDb } from '@/lib/db';
 
 export async function GET(request: Request) {
   try {
-    const supabase = getSupabase();
-    if (!supabase) {
-      // Database not configured — return empty
+    const sql = getDb();
+    if (!sql) {
       return NextResponse.json({ locations: [] });
     }
 
@@ -17,21 +16,18 @@ export async function GET(request: Request) {
 
     const radiusMeters = radiusMiles * 1609.34;
 
-    const { data, error } = await supabase.rpc('get_nearby_locations', {
-      p_latitude: lat,
-      p_longitude: lng,
-      p_radius_meters: radiusMeters,
-      p_public_only: publicOnly,
-    });
-
-    if (error) {
-      console.error('Supabase query error:', error);
-      return NextResponse.json({ locations: [] });
-    }
+    const data = await sql`
+      SELECT * FROM get_nearby_locations(
+        ${lat},
+        ${lng},
+        ${radiusMeters},
+        ${publicOnly}
+      )
+    `;
 
     return NextResponse.json({ locations: data || [] });
   } catch (err) {
     console.error('Locations API error:', err);
-    return NextResponse.json({ locations: [] });
+    return NextResponse.json({ error: 'Failed to fetch locations' }, { status: 500 });
   }
 }

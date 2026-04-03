@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getSupabase } from '@/lib/supabase';
+import { getDb } from '@/lib/db';
 
 export async function POST(request: Request) {
   try {
@@ -25,34 +25,30 @@ export async function POST(request: Request) {
       );
     }
 
-    const supabase = getSupabase();
-    if (!supabase) {
-      // Database not configured yet — accept but don't persist
-      console.warn('Supabase not configured, skipping save');
+    const sql = getDb();
+    if (!sql) {
+      console.warn('Database not configured, skipping save');
       return NextResponse.json({ success: true, id: null, warning: 'Database not configured' });
     }
 
-    const { data, error } = await supabase.rpc('insert_speed_test', {
-      p_user_id: user_id || null,
-      p_download_mbps: download_mbps,
-      p_upload_mbps: upload_mbps || 0,
-      p_latency_ms: latency_ms || 0,
-      p_jitter_ms: jitter_ms || 0,
-      p_latitude: latitude,
-      p_longitude: longitude,
-      p_is_public_wifi: is_public_wifi || false,
-      p_ssid_hash: ssid_hash || null,
-      p_network_type: network_type || 'unknown',
-    });
+    const rows = await sql`
+      SELECT insert_speed_test(
+        ${user_id || null},
+        ${download_mbps},
+        ${upload_mbps || 0},
+        ${latency_ms || 0},
+        ${jitter_ms || 0},
+        ${latitude},
+        ${longitude},
+        ${is_public_wifi || false},
+        ${ssid_hash || null},
+        ${network_type || 'unknown'}
+      ) AS id
+    `;
 
-    if (error) {
-      console.error('Supabase insert error:', error);
-      return NextResponse.json({ success: true, id: null, warning: 'Database unavailable' });
-    }
-
-    return NextResponse.json({ success: true, id: data });
+    return NextResponse.json({ success: true, id: rows[0]?.id });
   } catch (err) {
     console.error('Results API error:', err);
-    return NextResponse.json({ success: true, id: null, warning: 'Database unavailable' });
+    return NextResponse.json({ error: 'Failed to save result' }, { status: 500 });
   }
 }
