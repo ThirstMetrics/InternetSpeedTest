@@ -15,7 +15,7 @@
     "@types/mapbox-gl": "^3.4.1",
     "@types/uuid": "^10.0.0",
     "mapbox-gl": "^3.18.1",
-    "next": "16.1.6",
+    "next": "16.2.3",
     "next-auth": "^5.0.0-beta.30",
     "react": "19.2.3",
     "react-dom": "19.2.3",
